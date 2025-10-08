@@ -1,11 +1,11 @@
 # From Manipulation to Mistrust: Explaining Diverse Micro-Video Misinformation for Robust Debunking in the Wild
 
-**HMVD (Hierarchical Misinformation Video Detection)** - A multi-agent system for robust video misinformation detection and explanation.
+**FakeAgent** - A multi-agent system for robust video misinformation detection and explanation.
 
 ## 🚀 Quick Start
 
 ```bash
-cd HMVD
+cd FakeAgent
 
 # Install dependencies
 pip install -r requirements.txt
@@ -18,7 +18,7 @@ export OPENAI_API_BASE="your_api_base"
 ## 📁 Project Structure
 
 ```
-HMVD/
+FakeAgent/
 ├── baselines/          # Baseline models and inference
 │   └── hmvd_inference_mix.py
 ├── FakeAgent/         # Multi-agent detection system

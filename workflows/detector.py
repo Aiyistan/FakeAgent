@@ -8,21 +8,52 @@ import asyncio
 import aiofiles
 from typing import Dict, List, Any, Optional
 from functools import lru_cache
+from pathlib import Path
 
-from ..agents import (
-    ConsistencyAnalyzer,
-    AIDetector,
-    OffensiveLanguageDetector,
-    FactChecker,
-    Retriever,
-    Locator,
-    Integrator,
-)
+try:
+    # 尝试使用相对导入（当作为模块导入时）
+    from ..agents import (
+        ConsistencyAnalyzer,
+        AIDetector,
+        OffensiveLanguageDetector,
+        FactChecker,
+        Retriever,
+        Locator,
+        Integrator,
+    )
+    from ..utils.video_frame_extractor import VideoFrameExtractor
+    from ..utils.frame_caption_openai import VisionInferencer
+    from ..utils.audio_extractor import AudioExtractor
+except ImportError:
+    # 如果相对导入失败，使用绝对导入（当直接运行时）
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    from agents import (
+        ConsistencyAnalyzer,
+        AIDetector,
+        OffensiveLanguageDetector,
+        FactChecker,
+        Retriever,
+        Locator,
+        Integrator,
+    )
+    from utils.video_frame_extractor import VideoFrameExtractor
+    from utils.frame_caption_openai import VisionInferencer
+    from utils.audio_extractor import AudioExtractor
 
 
 class FakeVideoDetectorWorkflow:
     """虚假视频检测工作流（优化版）"""
-    def __init__(self, max_workers=8):
+    def __init__(self, max_workers=8, 
+                 video_output_dir=None, 
+                 frame_caption_model_path=None,
+                 audio_model_dir=None,
+                 audio_device=0,
+                 openai_api_base=None,
+                 openai_api_key=None,
+                 openai_model="gpt-4-vision-preview"):
         self.state: Dict[str, Any] = {}
         self.agents = {
             'consistency_analyzer': ConsistencyAnalyzer(),
@@ -36,12 +67,134 @@ class FakeVideoDetectorWorkflow:
         }
         self.max_workers = max_workers  # 最大工作线程数
         self.cache = {}  # 简单缓存机制
+        
+        # 预处理工具初始化
+        self.video_output_dir = video_output_dir or "./tmp/video_frames"
+        self.frame_caption_model_path = frame_caption_model_path
+        self.audio_model_dir = audio_model_dir
+        self.audio_device = audio_device
+        
+        # OpenAI API 相关参数
+        self.openai_api_base = openai_api_base
+        self.openai_api_key = openai_api_key
+        self.openai_model = openai_model
+        
+        # 延迟初始化，只在需要时创建
+        self._frame_extractor = None
+        self._frame_caption_inferencer = None
+        self._audio_extractor = None
 
     @lru_cache(maxsize=32)
     def _load_json_file(self, file_path: str) -> Dict:
         """缓存JSON文件加载结果"""
         with open(file_path, 'r', encoding='utf-8') as f:
             return json.load(f)
+    
+    @property
+    def frame_extractor(self):
+        """延迟初始化视频帧提取器"""
+        if self._frame_extractor is None:
+            self._frame_extractor = VideoFrameExtractor(
+                video_dir=os.path.dirname(self.state.get('video_path', '')),
+                output_dir=self.video_output_dir,
+                num_frames=8
+            )
+        return self._frame_extractor
+    
+    @property
+    def frame_caption_inferencer(self):
+        """延迟初始化帧描述推理器"""
+        if self._frame_caption_inferencer is None and self.openai_api_base and self.openai_api_key:
+            self._frame_caption_inferencer = VisionInferencer(
+                api_base=self.openai_api_base,
+                api_key=self.openai_api_key,
+                model=self.openai_model,
+                timeout=60
+            )
+        return self._frame_caption_inferencer
+    
+    @property
+    def audio_extractor(self):
+        """延迟初始化音频提取器"""
+        if self._audio_extractor is None and self.audio_model_dir:
+            self._audio_extractor = AudioExtractor(
+                model_dir=self.audio_model_dir,
+                device=self.audio_device,
+                video_base_dir=os.path.dirname(self.state.get('video_path', '')),
+                audio_output_dir=os.path.join(self.video_output_dir, "audio")
+            )
+        return self._audio_extractor
+    
+    def preprocess_video(self, video_path: str) -> Dict[str, Any]:
+        """
+        预处理视频：提取帧、生成帧描述、提取和转录音频
+        
+        Args:
+            video_path: 视频文件路径
+            
+        Returns:
+            包含预处理结果的字典
+        """
+        video_id = Path(video_path).stem
+        result = {
+            'video_id': video_id,
+            'frames': [],
+            'frame_times': [],
+            'frame_descriptions': [],
+            'transcript': '无'
+        }
+        
+        try:
+            # 1. 提取视频帧
+            print(f"开始提取视频帧: {video_id}")
+            frames, frame_times = self.frame_extractor.extract_frames_uniform(
+                video_path, video_id, quality_aware=True
+            )
+            result['frames'] = frames
+            result['frame_times'] = frame_times
+            print(f"成功提取 {len(frames)} 帧")
+            
+            # 2. 生成帧描述（如果有模型）
+            if self.frame_caption_inferencer:
+                print(f"开始生成帧描述: {video_id}")
+                try:
+                    frame_descriptions = self.frame_caption_inferencer.batch_infer(frames, prompt="请用100字左右描述这个视频帧中的新闻事件或短视频传达的内容。")
+                    result['frame_descriptions'] = frame_descriptions
+                    print(f"成功生成 {len(frame_descriptions)} 个帧描述")
+                except Exception as e:
+                    print(f"生成帧描述失败: {e}")
+                    result['frame_descriptions'] = ["无画面描述"] * len(frames)
+            else:
+                print("跳过帧描述生成（未提供OpenAI API配置）")
+                result['frame_descriptions'] = ["无画面描述"] * len(frames)
+            
+            # 3. 提取和转录音频（如果有模型）
+            if self.audio_extractor:
+                print(f"开始提取和转录音频: {video_id}")
+                try:
+                    # 提取音频
+                    audio_path = self.audio_extractor.extract_audio_from_video(video_path)
+                    
+                    # 转录音频
+                    transcript = self.audio_extractor.transcribe_audio(str(audio_path))
+                    result['transcript'] = transcript
+                    print(f"成功转录音频: {transcript[:50]}...")
+                except Exception as e:
+                    print(f"音频提取或转录失败: {e}")
+                    result['transcript'] = '无'
+            else:
+                print("跳过音频提取和转录（未提供模型路径）")
+                result['transcript'] = '无'
+                
+        except Exception as e:
+            print(f"视频预处理失败: {e}")
+            # 返回默认值，确保后续流程可以继续
+            result['frames'] = []
+            result['frame_times'] = []
+            result['frame_descriptions'] = ["无画面描述"]
+            result['transcript'] = '无'
+            
+        return result
 
     async def _async_load_json_file(self, file_path: str) -> Dict:
         """异步加载JSON文件"""
@@ -287,7 +440,8 @@ class FakeVideoDetectorWorkflow:
         # print("整合分析结果:")
         # print(self.state["analysis"])
 
-    async def run_workflow_async(self, video_path: str, video_title: str = "", transcript_json: str="", frame_caption_json: str=""):
+    async def run_workflow_async(self, video_path: str, video_title: str = "", transcript_json: str="", frame_caption_json: str="", 
+                              use_preprocessing: bool = False):
         """异步运行完整的工作流"""
         try:
             # if not os.path.exists(video_path):
@@ -298,12 +452,33 @@ class FakeVideoDetectorWorkflow:
 
             # 初始化状态
             self.initialize_state(video_path, video_title, transcript_json, frame_caption_json)
-
-            # 并行执行转录和帧描述
-            await asyncio.gather(
-                self.transcribe_audio(),
-                self.describe_frames()
-            )
+            
+            # 如果启用预处理，则执行预处理
+            if use_preprocessing:
+                print("开始视频预处理...")
+                preprocess_result = await asyncio.get_event_loop().run_in_executor(
+                    None, self.preprocess_video, video_path
+                )
+                
+                # 更新状态中的转录和帧描述
+                if preprocess_result['transcript'] and preprocess_result['transcript'] != '无':
+                    self.state["transcription"] = preprocess_result['transcript']
+                
+                if preprocess_result['frame_descriptions']:
+                    # 添加时间戳信息
+                    frame_descriptions_with_timestamps = [
+                        f"[timestamp={timestamp}s][frame_description]: {description}"
+                        for description, timestamp in zip(preprocess_result['frame_descriptions'], preprocess_result['frame_times'])
+                    ]
+                    self.state["frame_descriptions"] = frame_descriptions_with_timestamps
+                
+                print("视频预处理完成")
+            else:
+                # 并行执行转录和帧描述
+                await asyncio.gather(
+                    self.transcribe_audio(),
+                    self.describe_frames()
+                )
 
             # 并行执行分析代理
             self.run_analysis_agents()
@@ -319,11 +494,12 @@ class FakeVideoDetectorWorkflow:
             self.state["error"] = str(e)
             return self.state
 
-    def run_workflow(self, video_path: str, video_title: str = "", transcript_json: str="", frame_caption_json: str=""):
+    def run_workflow(self, video_path: str, video_title: str = "", transcript_json: str="", frame_caption_json: str="", 
+                  use_preprocessing: bool = False):
         """运行完整的工作流（同步接口）"""
-        return asyncio.run(self.run_workflow_async(video_path, video_title, transcript_json, frame_caption_json))
+        return asyncio.run(self.run_workflow_async(video_path, video_title, transcript_json, frame_caption_json, use_preprocessing))
 
-    def batch_process(self, video_list: List[Dict[str, str]]):
+    def batch_process(self, video_list: List[Dict[str, str]], use_preprocessing: bool = False):
         """批量处理多个视频"""
         print(f"开始批量处理 {len(video_list)} 个视频...")
 
@@ -335,7 +511,8 @@ class FakeVideoDetectorWorkflow:
                     video['path'],
                     video.get('title', ''),
                     video.get("transcript_json", ""),
-                    video.get("frame_caption_json", "")
+                    video.get("frame_caption_json", ""),
+                    use_preprocessing
                 ): video['path']
                 for video in video_list
             }
@@ -354,15 +531,47 @@ class FakeVideoDetectorWorkflow:
         return results
 
 
-def kickoff(video_path: str, video_title: str = "", transcript_json: str = "", frame_caption_json: str=""):
+def kickoff(video_path: str, video_title: str = "", transcript_json: str = "", frame_caption_json: str="", 
+             use_preprocessing: bool = False, 
+             video_output_dir=None, 
+             frame_caption_model_path=None,
+             audio_model_dir=None,
+             audio_device=0,
+             openai_api_base=os.getenv('MULTIMODAL_OPENAI_API_BASE'),
+             openai_api_key=os.getenv('MULTIMODAL_OPENAI_API_KEY'),
+             openai_model=os.getenv('MULTIMODAL_OPENAI_MODEL')):
     """启动检测流程"""
     # 预处理: 检查是否有video_path的音频转录和视频抽帧caption,如果没有先生成
     
-    workflow = FakeVideoDetectorWorkflow()
-    return workflow.run_workflow(video_path, video_title, transcript_json=transcript_json, frame_caption_json=frame_caption_json)
+    workflow = FakeVideoDetectorWorkflow(
+        video_output_dir=video_output_dir,
+        frame_caption_model_path=frame_caption_model_path,
+        audio_model_dir=audio_model_dir,
+        audio_device=audio_device,
+        openai_api_base=openai_api_base,
+        openai_api_key=openai_api_key,
+        openai_model=openai_model
+    )
+    return workflow.run_workflow(video_path, video_title, transcript_json=transcript_json, 
+                               frame_caption_json=frame_caption_json, use_preprocessing=use_preprocessing)
 
 
-def batch_kickoff(video_list: List[Dict[str, str]]):
+def batch_kickoff(video_list: List[Dict[str, str]], use_preprocessing: bool = False,
+                  video_output_dir=None, 
+                  frame_caption_model_path=None,
+                  audio_model_dir=None,
+                  audio_device=0,
+                  openai_api_base=None,
+                  openai_api_key=None,
+                  openai_model="gpt-4-vision-preview"):
     """批量启动检测流程"""
-    workflow = FakeVideoDetectorWorkflow()
-    return workflow.batch_process(video_list)
+    workflow = FakeVideoDetectorWorkflow(
+        video_output_dir=video_output_dir,
+        frame_caption_model_path=frame_caption_model_path,
+        audio_model_dir=audio_model_dir,
+        audio_device=audio_device,
+        openai_api_base=openai_api_base,
+        openai_api_key=openai_api_key,
+        openai_model=openai_model
+    )
+    return workflow.batch_process(video_list, use_preprocessing)

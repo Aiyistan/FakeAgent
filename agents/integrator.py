@@ -1,8 +1,8 @@
 import json
 from typing import Dict, Any
 
-from .base import BaseAgent
-from ..utils.json_tools import parse_model_json_response
+from agents.base import BaseAgent
+from utils.json_tools import parse_model_json_response
 
 
 class Integrator(BaseAgent):
@@ -23,7 +23,7 @@ class Integrator(BaseAgent):
         external_evidence = inputs.get('external_evidence', '未检索外部证据')
         suspicious_segments = inputs.get('suspicious_segments', '未定位可疑片段')
 
-        构建整合任务prompt
+        # 构建整合任务prompt
         task_description = f"""
             综合各个分析结果，给出最终判断：
 

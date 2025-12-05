@@ -3,7 +3,7 @@ import json
 import requests
 from typing import Dict, Any
 
-from .base import BaseAgent
+from agents.base import BaseAgent
 
 
 class Retriever(BaseAgent):
@@ -18,7 +18,7 @@ class Retriever(BaseAgent):
 
         # 从环境变量获取API keys，如果没有则使用默认key
         self.api_keys = os.getenv("SERPER_API_KEYS", "").split(",")
-        self.model = os.getenv("MODEL")
+        self.model = os.getenv("OPENAI_MODEL")
         self.current_key_index = 0
 
         # 定义联网搜索工具

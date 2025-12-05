@@ -1,8 +1,8 @@
 import json
 from typing import Dict, Any
 
-from .base import BaseAgent
-from ..utils.json_tools import parse_model_json_response
+from agents.base import BaseAgent
+from utils.json_tools import parse_model_json_response
 
 
 class FactChecker(BaseAgent):

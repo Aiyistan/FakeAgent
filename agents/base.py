@@ -18,7 +18,7 @@ class BaseAgent:
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_API_BASE")
         )
-        self.model = os.getenv("MODEL", "Qwen3-8B")
+        self.model = os.getenv("OPENAI_MODEL", "Qwen3-8B")
 
     def analyze(self, inputs: Dict[str, Any]) -> str:
         """执行分析，返回报告"""

@@ -29,20 +29,17 @@ def analyze_video(video_file, video_title, use_preprocessing):
         return "请上传视频文件", "", "", "", "", "", "", "", ""
     
     try:
-        # 创建临时文件
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
-            temp_path = temp_file.name
-            # 将上传的文件内容写入临时文件
-            with open(video_file, 'rb') as f:
-                temp_file.write(f.read())
-        
         # 调用检测函数
         start_time = time.time()
         result = kickoff(
-            video_path=temp_path,
+            video_path=video_file,
             video_title=video_title,
             use_preprocessing=use_preprocessing,
-            audio_model_dir="/root/siton-tmp/models/SenseVoiceSmall/"
+            audio_model_dir="/root/siton-tmp/models/SenseVoiceSmall/",
+            openai_api_base=os.getenv('MULTIMODAL_OPENAI_API_BASE'),
+            openai_api_key=os.getenv('MULTIMODAL_OPENAI_API_KEY'),
+            openai_model=os.getenv('MULTIMODAL_OPENAI_MODEL'),
+            video_output_dir='./tmp/video_prerocess'
         )
         processing_time = time.time() - start_time
         
@@ -62,8 +59,6 @@ def analyze_video(video_file, video_title, use_preprocessing):
         suspicious_segments = result.get('suspicious_segments', '无可疑片段定位')
         final_analysis = result.get('analysis', '无最终分析')
         
-        # 清理临时文件
-        os.unlink(temp_path)
         
         # 返回处理信息和各部分结果
         status_msg = f"✅ 分析完成，耗时: {processing_time:.2f} 秒"
@@ -96,7 +91,7 @@ def export_results():
         return None, "没有可导出的结果，请先分析视频"
     
     try:
-        # 创建临时文件
+        # # 创建临时文件
         with tempfile.NamedTemporaryFile(delete=False, suffix=".json", mode='w', encoding='utf-8') as temp_file:
             temp_path = temp_file.name
             json.dump(latest_result, temp_file, ensure_ascii=False, indent=2)
@@ -171,7 +166,12 @@ def create_ui():
         # 示例视频（如果有）
         gr.Examples(
             examples=[
-                ["/root/siton-tmp/projects/paper/ours/www2026/FakeAgent/examples/zZB5xaS5SNA.mp4", "Space X’s First Civilian Spacewalk Undertaken By Polaris Dawn Crew", True]
+                ["/root/siton-tmp/projects/paper/ours/www2026/FakeAgent/examples/6793884900228336911.mp4", "真假口罩区别在于中间层，假的一点即燃，真的不起火", True],
+                ["/root/siton-tmp/projects/paper/ours/www2026/FakeAgent/examples/3xsmc8srtfqe4dc.mp4", "太阳爆发强耀斑对我国长生了影响官方预报未来三天可能会出现地磁暴太阳耀斑爆发", True],
+                ["/root/siton-tmp/projects/paper/ours/www2026/FakeAgent/examples/BV1nV411W7aY.mp4", "SEVENTEEN\n“厌男”手势\nRabbit每日爆料\n次人绝对是故意的\n所以不要错过全部舞台\n金珉奎你破音了\n稍微\n就是这么自信\n把保护打在公屏上\n等一下吧\n格局要大", True],
+                ["/root/siton-tmp/projects/paper/ours/www2026/FakeAgent/examples/7038944755274829096.mp4", "买个做保姆挺不错\n😁😁", True],
+                ["/root/siton-tmp/projects/paper/ours/www2026/FakeAgent/examples/7274921328162016572.mp4", "日本将核污水排海海洋生物会有怎样的变化", True],
+                ["/root/siton-tmp/projects/paper/ours/www2026/FakeAgent/examples/7263761519211482405.mp4", "第二集被核污染影响的动物能有多可怕", True],
             ],
             inputs=[video_input, video_title, use_preprocessing]
         )

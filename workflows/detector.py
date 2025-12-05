@@ -69,7 +69,7 @@ class FakeVideoDetectorWorkflow:
         self.cache = {}  # 简单缓存机制
         
         # 预处理工具初始化
-        self.video_output_dir = video_output_dir or "./tmp/video_frames"
+        self.video_output_dir = video_output_dir
         self.frame_caption_model_path = frame_caption_model_path
         self.audio_model_dir = audio_model_dir
         self.audio_device = audio_device
@@ -96,7 +96,7 @@ class FakeVideoDetectorWorkflow:
         if self._frame_extractor is None:
             self._frame_extractor = VideoFrameExtractor(
                 video_dir=os.path.dirname(self.state.get('video_path', '')),
-                output_dir=self.video_output_dir,
+                output_dir=os.path.join(self.video_output_dir, 'frames'),
                 num_frames=8
             )
         return self._frame_extractor
@@ -144,6 +144,34 @@ class FakeVideoDetectorWorkflow:
             'transcript': '无'
         }
         
+        # 定义两个JSON文件路径
+        frame_caption_file = os.path.join(self.video_output_dir, f"{video_id}_frame_caption.json")
+        transcript_file = os.path.join(self.video_output_dir, f"{video_id}_transcript.json")
+        
+        # 确保输出目录存在
+        os.makedirs(self.video_output_dir, exist_ok=True)
+        
+        # 检查是否已经处理过
+        if os.path.exists(frame_caption_file) and os.path.exists(transcript_file):
+            print(f"发现已处理的视频 {video_id}，直接加载结果...")
+            try:
+                # 加载帧描述结果
+                with open(frame_caption_file, 'r', encoding='utf-8') as f:
+                    frame_data = json.load(f)
+                    result['frame_descriptions'] = frame_data.get('frame_descriptions', [])
+                    result['frame_times'] = frame_data.get('frame_times', [])
+                    result['frames'] = frame_data.get('frames', [])
+                
+                # 加载转录结果
+                with open(transcript_file, 'r', encoding='utf-8') as f:
+                    transcript_data = json.load(f)
+                    result['transcript'] = transcript_data.get('transcript', '无')
+                
+                print(f"成功加载已有处理结果")
+                return result
+            except Exception as e:
+                print(f"加载已有处理结果失败: {e}，将重新处理...")
+        
         try:
             # 1. 提取视频帧
             print(f"开始提取视频帧: {video_id}")
@@ -185,6 +213,30 @@ class FakeVideoDetectorWorkflow:
             else:
                 print("跳过音频提取和转录（未提供模型路径）")
                 result['transcript'] = '无'
+            
+            # 保存处理结果到两个JSON文件
+            try:
+                # 保存帧描述和相关信息
+                frame_data = {
+                    'video_id': video_id,
+                    'frames': result['frames'],
+                    'frame_times': result['frame_times'],
+                    'frame_descriptions': result['frame_descriptions']
+                }
+                with open(frame_caption_file, 'w', encoding='utf-8') as f:
+                    json.dump(frame_data, f, ensure_ascii=False, indent=2)
+                print(f"帧描述结果已保存到 {frame_caption_file}")
+                
+                # 保存转录结果
+                transcript_data = {
+                    'video_id': video_id,
+                    'transcript': result['transcript']
+                }
+                with open(transcript_file, 'w', encoding='utf-8') as f:
+                    json.dump(transcript_data, f, ensure_ascii=False, indent=2)
+                print(f"转录结果已保存到 {transcript_file}")
+            except Exception as e:
+                print(f"保存处理结果失败: {e}")
                 
         except Exception as e:
             print(f"视频预处理失败: {e}")
@@ -238,6 +290,17 @@ class FakeVideoDetectorWorkflow:
                 self.state["transcription"] = self.cache[cache_key]
                 return
 
+            # 首先检查是否有预处理生成的转录文件
+            if self.video_output_dir:
+                transcript_file = os.path.join(self.video_output_dir, f"{video_id}_transcript.json")
+                if os.path.exists(transcript_file):
+                    data = await self._async_load_json_file(transcript_file)
+                    transcript = data.get('transcript', '无')
+                    if transcript and transcript != '无':
+                        self.state["transcription"] = transcript
+                        self.cache[cache_key] = transcript  # 缓存结果
+                        return
+
             # 检查音频处理日志文件是否存在
             if transcript_json and os.path.exists(transcript_json):
                 data = await self._async_load_json_file(transcript_json)
@@ -269,6 +332,25 @@ class FakeVideoDetectorWorkflow:
             if cache_key in self.cache:
                 self.state["frame_descriptions"] = self.cache[cache_key]
                 return
+
+            # 首先检查是否有预处理生成的帧描述文件
+            if self.video_output_dir:
+                frame_caption_file = os.path.join(self.video_output_dir, f"{video_id}_frame_caption.json")
+                if os.path.exists(frame_caption_file):
+                    data = await self._async_load_json_file(frame_caption_file)
+                    frames = data.get('frames', [])
+                    frame_timestamps = data.get('frame_times', [])
+                    frame_descriptions = data.get('frame_descriptions', [])
+                    
+                    if frame_descriptions:
+                        # 添加时间戳信息
+                        frame_descriptions_with_timestamps = [
+                            f"[timestamp={timestamp}s][frame_description]: {description}"
+                            for description, timestamp in zip(frame_descriptions, frame_timestamps)
+                        ]
+                        self.state["frame_descriptions"] = frame_descriptions_with_timestamps
+                        self.cache[cache_key] = frame_descriptions_with_timestamps  # 缓存结果
+                        return
 
             # 检查处理日志文件是否存在
             processing_log_path = self.state['frame_caption_json']
@@ -315,35 +397,79 @@ class FakeVideoDetectorWorkflow:
     def run_analysis_agents(self):
         """运行分析代理（并行执行）"""
         print("开始运行分析代理...")
-        analysis_inputs = {
-            'video_title': self.state.get("video_title", "无"),
-            'video_transcription': self.state["transcription"],
-            'frame_descriptions': self.state["frame_descriptions"],
-        }
-
-        # 定义要并行运行的代理
-        agents_to_run = [
-            ('consistency_analysis', 'consistency_analyzer'),
-            ('ai_detection', 'ai_detector'),
-            ('offensive_language_detection', 'offensive_language_detector'),
-            ('fact_checking', 'fact_checker')
-        ]
-
-        # 并行执行分析代理
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {
-                executor.submit(self.agents[agent].analyze, analysis_inputs): key
-                for key, agent in agents_to_run
+        
+        # 获取视频ID
+        video_id = self.state['video_path'].split('/')[-1].split('.')[0]
+        
+        # 定义分析结果保存路径
+        analysis_results_file = os.path.join(self.video_output_dir, f"{video_id}_analysis_results.json")
+        
+        # 确保输出目录存在
+        os.makedirs(self.video_output_dir, exist_ok=True)
+        
+        # 检查是否已有分析结果
+        if os.path.exists(analysis_results_file):
+            print(f"发现已存在的分析结果文件，直接加载: {analysis_results_file}")
+            try:
+                with open(analysis_results_file, 'r', encoding='utf-8') as f:
+                    analysis_results = json.load(f)
+                
+                # 加载分析结果到状态中
+                self.state['consistency_analysis'] = analysis_results.get('consistency_analysis', '')
+                self.state['ai_detection'] = analysis_results.get('ai_detection', '')
+                self.state['offensive_language_detection'] = analysis_results.get('offensive_language_detection', '')
+                self.state['fact_checking'] = analysis_results.get('fact_checking', '')
+                
+                print("成功加载已有分析结果")
+            except Exception as e:
+                print(f"加载已有分析结果失败: {e}，将重新进行分析...")
+        else:
+            analysis_inputs = {
+                'video_title': self.state.get("video_title", "无"),
+                'video_transcription': self.state["transcription"],
+                'frame_descriptions': self.state["frame_descriptions"],
             }
 
-            for future in concurrent.futures.as_completed(futures):
-                key = futures[future]
-                try:
-                    self.state[key] = future.result()
-                    print(f"{key} 分析完成")
-                except Exception as e:
-                    print(f"{key} 分析失败: {e}")
-                    self.state[key] = f"分析失败: {str(e)}"
+            # 定义要并行运行的代理
+            agents_to_run = [
+                ('consistency_analysis', 'consistency_analyzer'),
+                ('ai_detection', 'ai_detector'),
+                ('offensive_language_detection', 'offensive_language_detector'),
+                ('fact_checking', 'fact_checker')
+            ]
+
+            # 并行执行分析代理
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = {
+                    executor.submit(self.agents[agent].analyze, analysis_inputs): key
+                    for key, agent in agents_to_run
+                }
+
+                for future in concurrent.futures.as_completed(futures):
+                    key = futures[future]
+                    try:
+                        self.state[key] = future.result()
+                        print(f"{key} 分析完成")
+                    except Exception as e:
+                        print(f"{key} 分析失败: {e}")
+                        self.state[key] = f"分析失败: {str(e)}"
+
+            # 保存分析结果
+            try:
+                analysis_results = {
+                    'video_id': video_id,
+                    'consistency_analysis': self.state.get('consistency_analysis', ''),
+                    'ai_detection': self.state.get('ai_detection', ''),
+                    'offensive_language_detection': self.state.get('offensive_language_detection', ''),
+                    'fact_checking': self.state.get('fact_checking', '')
+                }
+                
+                with open(analysis_results_file, 'w', encoding='utf-8') as f:
+                    json.dump(analysis_results, f, ensure_ascii=False, indent=2)
+                
+                print(f"分析结果已保存到: {analysis_results_file}")
+            except Exception as e:
+                print(f"保存分析结果失败: {e}")
 
         # 解析fact_checker结果判断是否需要外部证据
         try:
@@ -365,9 +491,35 @@ class FakeVideoDetectorWorkflow:
         except Exception as e:
             print(f"解析事实检查结果失败: {e}")
             self.state["need_external_evidence"] = False
-
+        
+        
     def run_evidence_retrieval(self):
         """运行外部证据检索和可疑片段定位"""
+        # 获取视频ID
+        video_id = self.state['video_path'].split('/')[-1].split('.')[0]
+        
+        # 定义证据检索结果保存路径
+        evidence_results_file = os.path.join(self.video_output_dir, f"{video_id}_evidence_results.json")
+        
+        # 确保输出目录存在
+        os.makedirs(self.video_output_dir, exist_ok=True)
+        
+        # 检查是否已有证据检索结果
+        if os.path.exists(evidence_results_file):
+            print(f"发现已存在的证据检索结果文件，直接加载: {evidence_results_file}")
+            try:
+                with open(evidence_results_file, 'r', encoding='utf-8') as f:
+                    evidence_results = json.load(f)
+                
+                # 加载证据检索结果到状态中
+                self.state['external_evidence'] = evidence_results.get('external_evidence', '未检索外部证据')
+                self.state['suspicious_segments'] = evidence_results.get('suspicious_segments', '未定位可疑片段')
+                
+                print("成功加载已有证据检索结果")
+                return
+            except Exception as e:
+                print(f"加载已有证据检索结果失败: {e}，将重新进行检索...")
+        
         # 提取关键词和核心观点
         fact_checking_str = self.state.get("fact_checking", "")
         try:
@@ -422,9 +574,48 @@ class FakeVideoDetectorWorkflow:
         except Exception as e:
             print(f"可疑片段定位失败: {e}")
             self.state["suspicious_segments"] = "定位失败"
+            
+        # 保存证据检索结果
+        try:
+            evidence_results = {
+                'video_id': video_id,
+                'external_evidence': self.state.get('external_evidence', '未检索外部证据'),
+                'suspicious_segments': self.state.get('suspicious_segments', '未定位可疑片段')
+            }
+            
+            with open(evidence_results_file, 'w', encoding='utf-8') as f:
+                json.dump(evidence_results, f, ensure_ascii=False, indent=2)
+            
+            print(f"证据检索结果已保存到: {evidence_results_file}")
+        except Exception as e:
+            print(f"保存证据检索结果失败: {e}")
 
     def run_integrator(self):
         """运行整合器"""
+        # 获取视频ID
+        video_id = self.state['video_path'].split('/')[-1].split('.')[0]
+        
+        # 定义整合结果保存路径
+        integration_results_file = os.path.join(self.video_output_dir, f"{video_id}_integration_results.json")
+        
+        # 确保输出目录存在
+        os.makedirs(self.video_output_dir, exist_ok=True)
+        
+        # 检查是否已有整合结果
+        if os.path.exists(integration_results_file):
+            print(f"发现已存在的整合结果文件，直接加载: {integration_results_file}")
+            try:
+                with open(integration_results_file, 'r', encoding='utf-8') as f:
+                    integration_results = json.load(f)
+                
+                # 加载整合结果到状态中
+                self.state['analysis'] = integration_results.get('analysis', '')
+                
+                print("成功加载已有整合结果")
+                return
+            except Exception as e:
+                print(f"加载已有整合结果失败: {e}，将重新进行整合...")
+        
         print("开始运行整合器...")
         integration_inputs = {
             'video_title': self.state.get("video_title", "无"),
@@ -439,6 +630,20 @@ class FakeVideoDetectorWorkflow:
         self.state["analysis"] = self.agents['integrator'].analyze(integration_inputs)
         # print("整合分析结果:")
         # print(self.state["analysis"])
+        
+        # 保存整合结果
+        try:
+            integration_results = {
+                'video_id': video_id,
+                'analysis': self.state.get('analysis', '')
+            }
+            
+            with open(integration_results_file, 'w', encoding='utf-8') as f:
+                json.dump(integration_results, f, ensure_ascii=False, indent=2)
+            
+            print(f"整合结果已保存到: {integration_results_file}")
+        except Exception as e:
+            print(f"保存整合结果失败: {e}")
 
     async def run_workflow_async(self, video_path: str, video_title: str = "", transcript_json: str="", frame_caption_json: str="", 
                               use_preprocessing: bool = False):
@@ -456,6 +661,7 @@ class FakeVideoDetectorWorkflow:
             # 如果启用预处理，则执行预处理
             if use_preprocessing:
                 print("开始视频预处理...")
+                # 执行预处理（内部会检查是否已有处理结果）
                 preprocess_result = await asyncio.get_event_loop().run_in_executor(
                     None, self.preprocess_video, video_path
                 )
@@ -542,7 +748,8 @@ def kickoff(video_path: str, video_title: str = "", transcript_json: str = "", f
              openai_model=os.getenv('MULTIMODAL_OPENAI_MODEL')):
     """启动检测流程"""
     # 预处理: 检查是否有video_path的音频转录和视频抽帧caption,如果没有先生成
-    
+    video_output_dir =  video_output_dir or "./tmp/video_preprocess"
+    video_output_dir = os.path.join(video_output_dir, os.path.basename(video_path).split(".")[0])
     workflow = FakeVideoDetectorWorkflow(
         video_output_dir=video_output_dir,
         frame_caption_model_path=frame_caption_model_path,

@@ -192,3 +192,5 @@ outputs/
 # Configuration files with sensitive information
 config.ini
 secrets.json
+
+examples/

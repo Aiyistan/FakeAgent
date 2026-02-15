@@ -150,6 +150,7 @@ class Retriever(BaseAgent):
                 messages=messages
             )
 
-            return final_response.choices[0].message.content
+            content =  final_response.choices[0].message.content
+            return f"根据查询 '{function_args['query']}' 检索到的内容:\n{messages[-1]['content']}"
         else:
             return response_message.content

@@ -483,8 +483,7 @@ class FakeVideoDetectorWorkflow:
             else:
                 confidence = '低'
 
-            if (fact_checking["need_external_evidence"] == '否' or
-                (fact_checking['is_real'] in ['是', '否'] and confidence in ['高', '中'])):
+            if fact_checking["need_external_evidence"] == '否':
                 self.state["need_external_evidence"] = False
             else:
                 self.state["need_external_evidence"] = True
@@ -692,6 +691,8 @@ class FakeVideoDetectorWorkflow:
             # 执行后续步骤
             self.run_evidence_retrieval()
             self.run_integrator()
+            # # 随机休眠8-15秒
+            # await asyncio.sleep(random.uniform(8, 15))
 
             print("检测流程完成")
             return self.state

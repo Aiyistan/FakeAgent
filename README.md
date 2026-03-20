@@ -41,3 +41,7 @@ FakeAgent/
 ### Inference Modes
 - **Basic Mode**: Fast misinformation classification
 - **Video Thought Chain (VOT)**: Detailed reasoning and explanation
+
+
+### 📩 Dataset Access
+If you need access to the dataset used in this project, please contact via email: yangyf001@stu.xjtu.edu.cn

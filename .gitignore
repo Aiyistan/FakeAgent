@@ -195,3 +195,13 @@ secrets.json
 
 examples/
 gradio_app2.py
+
+# Paper directory
+paper/
+
+# Project documentation (internal)
+CLAUDE.md
+
+# Test files
+test_detector.py
+test_*.py

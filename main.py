@@ -25,7 +25,7 @@ except ImportError:
     parent_dir = os.path.dirname(current_dir)
     if parent_dir not in sys.path:
         sys.path.insert(0, parent_dir)
-    from fakedetectworkflow.workflows.detector import kickoff, FakeVideoDetectorWorkflow
+    from workflows.detector import kickoff, FakeVideoDetectorWorkflow
 
 # 全局锁，用于线程安全的文件写入
 file_lock = threading.Lock()
@@ -40,7 +40,7 @@ def load_metadata_cached(jsonl_path: str) -> List[Dict]:
             metadata.append(data)
     return metadata
 
-def process_single_video_optimized(video_data: Dict, output_dir: Path, workflow_pool: List[FakeVideoDetectorWorkflow]) -> Dict:
+def process_single_video_optimized(video_data: Dict, output_dir: Path, workflow_pool: List[FakeVideoDetectorWorkflow], use_preprocessing: bool) -> Dict:
     """优化版：处理单个视频（使用工作流池）"""
     video_id = video_data['video_id']
     title = video_data['title']
@@ -49,7 +49,7 @@ def process_single_video_optimized(video_data: Dict, output_dir: Path, workflow_
     
     # 构建视频路径
     video_path = f"/data/yyf/dataset/fakevideo/HMVD/{video_id}.mp4"
-    video_frames_path = f"/root/siton-tmp/dataset/frames_noresize/{video_id}"
+    video_frames_path = f"/data/yyf/dataset/fakevideo/frames_noresize/{video_id}"
     
     # 检查视频文件是否存在
     if not os.path.exists(video_frames_path):
@@ -67,7 +67,7 @@ def process_single_video_optimized(video_data: Dict, output_dir: Path, workflow_
         workflow = workflow_pool.pop() if workflow_pool else FakeVideoDetectorWorkflow()
         
         start_time = time.time()
-        result = workflow.run_workflow(video_path, title)
+        result = workflow.run_workflow(video_path, title, use_preprocessing=use_preprocessing)
         processing_time = time.time() - start_time
         
         # 将工作流实例返回到池中
@@ -152,7 +152,7 @@ def save_agent_results_async(result: Dict, output_dir: Path, video_id: str):
     threading.Thread(target=save_async, daemon=True).start()
 
 def process_dataset_parallel(jsonl_path: str, output_dir: str, max_videos: Optional[int] = None, 
-                           skip_existing: bool = True, max_workers: int = 8):
+                           skip_existing: bool = True, max_workers: int = 8, use_preprocessing: bool = True) -> List[Dict]:
     """优化版：并行处理整个数据集"""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -189,7 +189,7 @@ def process_dataset_parallel(jsonl_path: str, output_dir: str, max_videos: Optio
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         # 提交所有任务
         future_to_video = {
-            executor.submit(process_single_video_optimized, video_data, output_path, workflow_pool): video_data
+            executor.submit(process_single_video_optimized, video_data, output_path, workflow_pool, use_preprocessing): video_data
             for video_data in videos_to_process
         }
         
@@ -314,7 +314,7 @@ def parse_args():
                         default="/data/yyf/projects/video/HMVD/data/HMVD_repaired.jsonl",
                         help="HMVD.jsonl文件路径")
     parser.add_argument("--output_dir",
-                        default="/data/yyf/projects/video/HMVD/data/detection_results_withoutretrival_0922",
+                        default="/data/yyf/paper/www2026/FakeAgent/tmp/detection_results_tmp",
                         help="检测结果输出目录")
     parser.add_argument("--max_videos", type=int, default=None,
                         help="最大处理视频数量（用于测试）")
@@ -328,6 +328,8 @@ def parse_args():
                         help="视频标题（用于单视频处理）")
     parser.add_argument("--max_workers", type=int, default=4,
                         help="并行处理的工作线程数")
+    parser.add_argument("--use_preprocessing", action="store_true", default=False,
+                        help="是否使用预处理功能")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -356,7 +358,8 @@ if __name__ == "__main__":
             output_dir=args.output_dir,
             max_videos=args.max_videos,
             skip_existing=args.skip_existing,
-            max_workers=args.max_workers
+            max_workers=args.max_workers,
+            use_preprocessing=args.use_preprocessing
         )
         total_time = time.time() - start_time
         

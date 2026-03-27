@@ -10,6 +10,10 @@ from typing import Dict, List, Any, Optional
 from functools import lru_cache
 from pathlib import Path
 
+# 获取项目根目录
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+
 try:
     # 尝试使用相对导入（当作为模块导入时）
     from ..agents import (
@@ -65,15 +69,15 @@ class FakeVideoDetectorWorkflow:
             'integrator': Integrator(),
             # 'answer': Answer()
         }
-        self.max_workers = max_workers  # 最大工作线程数
+        self.max_workers = max_workers  # ���大工作线程数
         self.cache = {}  # 简单缓存机制
-        
+
         # 预处理工具初始化
         self.video_output_dir = video_output_dir
         self.frame_caption_model_path = frame_caption_model_path
         self.audio_model_dir = audio_model_dir
         self.audio_device = audio_device
-        
+
         # OpenAI API 相关参数
         self.openai_api_base = openai_api_base
         self.openai_api_key = openai_api_key
@@ -290,7 +294,23 @@ class FakeVideoDetectorWorkflow:
                 self.state["transcription"] = self.cache[cache_key]
                 return
 
-            # 首先检查是否有预处理生成的转录文件
+            # 1. 首先检查 data/audio_processing_log.json
+            audio_log_path = DATA_DIR / "audio_processing_log.json"
+            if audio_log_path.exists():
+                try:
+                    data = await self._async_load_json_file(str(audio_log_path))
+                    for item in data:
+                        if video_id == item.get("video_id"):
+                            transcript = item.get("transcript", "")
+                            if transcript and transcript.strip():
+                                print(f"从 audio_processing_log.json 加载转录结果: {video_id}")
+                                self.state["transcription"] = transcript
+                                self.cache[cache_key] = transcript
+                                return
+                except Exception as e:
+                    print(f"加载 audio_processing_log.json 失败: {e}")
+
+            # 2. 检查预处理生成的转录文件
             if self.video_output_dir:
                 transcript_file = os.path.join(self.video_output_dir, f"{video_id}_transcript.json")
                 if os.path.exists(transcript_file):
@@ -301,7 +321,7 @@ class FakeVideoDetectorWorkflow:
                         self.cache[cache_key] = transcript  # 缓存结果
                         return
 
-            # 检查音频处理日志文件是否存在
+            # 3. 检查 transcript_json 参数指定的文件
             if transcript_json and os.path.exists(transcript_json):
                 data = await self._async_load_json_file(transcript_json)
                 for item in data:
@@ -323,9 +343,10 @@ class FakeVideoDetectorWorkflow:
         """异步描述视频画面"""
         try:
             video_id = self.state['video_path'].split('/')[-1].split('.')[0]
-            
+
             frames = []
             frame_timestamps = []
+            frame_descriptions = []
 
             # 检查缓存
             cache_key = f"frames_{video_id}"
@@ -333,7 +354,44 @@ class FakeVideoDetectorWorkflow:
                 self.state["frame_descriptions"] = self.cache[cache_key]
                 return
 
-            # 首先检查是否有预处理生成的帧描述文件
+            # 1. 首先从 data/processing_log2.json 获取帧数据
+            processing_log_path = DATA_DIR / "processing_log2.json"
+            if processing_log_path.exists():
+                try:
+                    data = await self._async_load_json_file(str(processing_log_path))
+                    for item in data:
+                        if item.get("video_id") == video_id:
+                            frames = item.get("frames", [])
+                            frame_timestamps = item.get("frame_times", [])
+                            if frames:
+                                print(f"从 processing_log2.json 加载帧数据: {video_id}")
+                                break
+                except Exception as e:
+                    print(f"加载 processing_log2.json 失败: {e}")
+
+            # 2. 从 data/frame_descriptions.json 获取帧描述
+            if frames:
+                frame_desc_path = DATA_DIR / "frame_descriptions.json"
+                if frame_desc_path.exists():
+                    try:
+                        data = await self._async_load_json_file(str(frame_desc_path))
+                        for item in data:
+                            if item.get("video_id") == video_id:
+                                frame_descriptions = item.get("frame_descriptions", [])
+                                if frame_descriptions:
+                                    print(f"从 frame_descriptions.json 加载帧描述: {video_id}")
+                                    # 添加时间戳信息
+                                    frame_descriptions_with_timestamps = [
+                                        f"[timestamp={timestamp}s][frame_description]: {description}"
+                                        for description, timestamp in zip(frame_descriptions, frame_timestamps)
+                                    ]
+                                    self.state["frame_descriptions"] = frame_descriptions_with_timestamps
+                                    self.cache[cache_key] = frame_descriptions_with_timestamps
+                                    return
+                    except Exception as e:
+                        print(f"加载 frame_descriptions.json 失败: {e}")
+
+            # 3. 检查预处理生成的帧描述文件
             if self.video_output_dir:
                 frame_caption_file = os.path.join(self.video_output_dir, f"{video_id}_frame_caption.json")
                 if os.path.exists(frame_caption_file):
@@ -341,7 +399,7 @@ class FakeVideoDetectorWorkflow:
                     frames = data.get('frames', [])
                     frame_timestamps = data.get('frame_times', [])
                     frame_descriptions = data.get('frame_descriptions', [])
-                    
+
                     if frame_descriptions:
                         # 添加时间戳信息
                         frame_descriptions_with_timestamps = [
@@ -352,7 +410,7 @@ class FakeVideoDetectorWorkflow:
                         self.cache[cache_key] = frame_descriptions_with_timestamps  # 缓存结果
                         return
 
-            # 检查处理日志文件是否存在
+            # 4. 检查 frame_caption_json 参数指定的文件
             processing_log_path = self.state['frame_caption_json']
             if processing_log_path and os.path.exists(processing_log_path):
                 data = await self._async_load_json_file(processing_log_path)
@@ -368,14 +426,14 @@ class FakeVideoDetectorWorkflow:
                 return
 
             # 检查是否已有推理结果
-            frame_descriptions = []
-            test_json_path = self.state['frame_caption_json']
-            if os.path.exists(test_json_path):
-                data = await self._async_load_json_file(test_json_path)
-                for item in data:
-                    if item["video_id"] == video_id:
-                        frame_descriptions = item["frame_descriptions"]
-                        break
+            if not frame_descriptions:
+                test_json_path = self.state['frame_caption_json']
+                if os.path.exists(test_json_path):
+                    data = await self._async_load_json_file(test_json_path)
+                    for item in data:
+                        if item["video_id"] == video_id:
+                            frame_descriptions = item["frame_descriptions"]
+                            break
 
             if not frame_descriptions:
                 print(f"未找到视频 {video_id} 的画面描述")
@@ -644,10 +702,15 @@ class FakeVideoDetectorWorkflow:
         except Exception as e:
             print(f"保存整合结果失败: {e}")
 
-    async def run_workflow_async(self, video_path: str, video_title: str = "", transcript_json: str="", frame_caption_json: str="", 
+    async def run_workflow_async(self, video_path: str, video_title: str = "", transcript_json: str="", frame_caption_json: str="",
                               use_preprocessing: bool = False):
         """异步运行完整的工作流"""
         try:
+            # 如果 video_output_dir 未设置，动态设置为包含 video_id 的路径
+            if self.video_output_dir is None:
+                video_id = os.path.basename(video_path).split(".")[0]
+                self.video_output_dir = os.path.join("./tmp/video_preprocess", video_id)
+
             # if not os.path.exists(video_path):
             #     raise FileNotFoundError(f"视频文件不存在: {video_path}")
 

@@ -3,7 +3,7 @@
 **From Manipulation to Mistrust: Explaining Diverse Micro-Video Misinformation for Robust Debunking in the Wild**
 
 [[Paper](https://arxiv.org/pdf/2603.25423)] 
-[https://dl.acm.org/doi/abs/10.1145/3774904.3792721]
+[[WWW 26](https://dl.acm.org/doi/abs/10.1145/3774904.3792721)]
 A multi-agent system for robust video misinformation detection and explanation.
 
 ## 🚀 Quick Start
@@ -75,4 +75,4 @@ python gradio_app.py
 
 ## 📩 Dataset Access
 
-If you need access to the dataset used in this project, please contact via email: **yangyf001@stu.xjtu.edu.cn** **zhizeng@stu.xjtu.edu.cn**
+If you need access to the dataset used in this project, please contact via email: **yangyf001@stu.xjtu.edu.cn**, **zhizeng@stu.xjtu.edu.cn**

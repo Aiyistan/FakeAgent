@@ -75,4 +75,4 @@ python gradio_app.py
 
 ## 📩 Dataset Access
 
-If you need access to the dataset used in this project, please contact via email: **yangyf001@stu.xjtu.edu.cn**
+If you need access to the dataset used in this project, please contact via email: **yangyf001@stu.xjtu.edu.cn** **zhizeng@stu.xjtu.edu.cn**
